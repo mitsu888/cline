@@ -32,6 +32,13 @@ extension Date {
         return formatter.localizedString(for: self, relativeTo: Date())
     }
 
+    var shortWeekday: String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ja_JP")
+        formatter.dateFormat = "E"
+        return formatter.string(from: self)
+    }
+
     var isToday: Bool {
         Calendar.current.isDateInToday(self)
     }

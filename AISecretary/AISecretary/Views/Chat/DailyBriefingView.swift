@@ -6,8 +6,13 @@ struct DailyBriefingView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \ScheduleItem.startDate) private var schedules: [ScheduleItem]
     @Query(sort: \TaskItem.createdAt) private var tasks: [TaskItem]
+    @Query(sort: \HabitItem.createdAt) private var habits: [HabitItem]
+    @Query(sort: \HabitLog.date, order: .reverse) private var habitLogs: [HabitLog]
     @StateObject private var briefingService = DailyBriefingService()
+    @StateObject private var travelTimeService = TravelTimeService()
     @Environment(\.dismiss) private var dismiss
+
+    @State private var travelTimes: [UUID: TravelTimeResult] = [:]
 
     var body: some View {
         NavigationStack {
@@ -42,6 +47,7 @@ struct DailyBriefingView: View {
             }
             .task {
                 if briefingService.todaysBriefing == nil {
+                    travelTimes = await travelTimeService.calculateTravelTimesForToday(schedules: schedules)
                     await generateBriefing()
                 }
             }
@@ -73,21 +79,52 @@ struct DailyBriefingView: View {
 
     @ViewBuilder
     private func briefingContent(_ briefing: DailyBriefing) -> some View {
-        // 挨拶
         Text(briefing.greeting)
             .font(.title3)
             .fontWeight(.medium)
 
         Divider()
 
+        // エネルギーアドバイス
+        if !briefing.energyAdvice.isEmpty {
+            sectionCard(title: "エネルギー", icon: "battery.75", color: .green) {
+                Text(briefing.energyAdvice)
+            }
+        }
+
         // スケジュール概要
         sectionCard(title: "今日のスケジュール", icon: "calendar", color: .blue) {
             Text(briefing.scheduleSummary)
         }
 
+        // 移動時間の注意
+        if !briefing.travelWarnings.isEmpty {
+            sectionCard(title: "移動時間の注意", icon: "car.fill", color: .cyan) {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(briefing.travelWarnings, id: \.self) { warning in
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: "exclamationmark.circle.fill")
+                                .foregroundStyle(.cyan)
+                                .font(.caption)
+                                .padding(.top, 2)
+                            Text(warning)
+                                .font(.subheadline)
+                        }
+                    }
+                }
+            }
+        }
+
         // タスク概要
         sectionCard(title: "タスク状況", icon: "checklist", color: .indigo) {
             Text(briefing.taskSummary)
+        }
+
+        // 習慣サマリー
+        if !briefing.habitSummary.isEmpty {
+            sectionCard(title: "習慣トラッカー", icon: "flame.fill", color: .orange) {
+                Text(briefing.habitSummary)
+            }
         }
 
         // オーバーロード警告
@@ -212,6 +249,10 @@ struct DailyBriefingView: View {
         _ = try? await briefingService.generateDailyBriefing(
             schedules: schedules,
             tasks: tasks,
+            habits: habits,
+            habitLogs: habitLogs,
+            energyProfile: appState.energyProfile,
+            travelTimes: travelTimes,
             userName: appState.userName
         )
     }

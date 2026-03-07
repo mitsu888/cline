@@ -2,10 +2,13 @@ import SwiftUI
 import SwiftData
 
 struct ScheduleView: View {
+    @EnvironmentObject var appState: AppState
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \ScheduleItem.startDate) private var schedules: [ScheduleItem]
+    @StateObject private var travelTimeService = TravelTimeService()
     @State private var showAddSheet = false
     @State private var selectedDate = Date()
+    @State private var travelTimes: [UUID: TravelTimeResult] = [:]
 
     var filteredSchedules: [ScheduleItem] {
         schedules.filter { schedule in
@@ -31,7 +34,10 @@ struct ScheduleView: View {
                 } else {
                     List {
                         ForEach(filteredSchedules, id: \.id) { schedule in
-                            ScheduleRow(schedule: schedule)
+                            ScheduleRow(
+                                schedule: schedule,
+                                travelTime: travelTimes[schedule.id]
+                            )
                         }
                         .onDelete(perform: deleteSchedules)
                     }
@@ -54,6 +60,12 @@ struct ScheduleView: View {
             .sheet(isPresented: $showAddSheet) {
                 AddScheduleView(selectedDate: selectedDate)
             }
+            .onChange(of: selectedDate) { _, _ in
+                Task { await calculateTravelTimes() }
+            }
+            .task {
+                await calculateTravelTimes()
+            }
         }
     }
 
@@ -61,13 +73,30 @@ struct ScheduleView: View {
         for index in offsets {
             let schedule = filteredSchedules[index]
             NotificationService.shared.cancelNotification(id: "schedule-\(schedule.id)")
+            NotificationService.shared.cancelNotification(id: "travel-\(schedule.id)")
             modelContext.delete(schedule)
+        }
+    }
+
+    private func calculateTravelTimes() async {
+        let schedulesWithLocation = filteredSchedules.filter { !$0.location.isEmpty }
+        guard !schedulesWithLocation.isEmpty else { return }
+
+        travelTimes = await travelTimeService.calculateTravelTimesForToday(schedules: filteredSchedules)
+
+        // 出発通知も設定
+        for schedule in schedulesWithLocation {
+            _ = await travelTimeService.calculateAndNotify(
+                currentLocation: appState.defaultLocation,
+                nextSchedule: schedule
+            )
         }
     }
 }
 
 struct ScheduleRow: View {
     let schedule: ScheduleItem
+    var travelTime: TravelTimeResult?
 
     var body: some View {
         HStack(spacing: 12) {
@@ -96,6 +125,18 @@ struct ScheduleRow: View {
                         Text(schedule.location)
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                    }
+                }
+
+                // 移動時間表示
+                if let travel = travelTime {
+                    HStack(spacing: 4) {
+                        Image(systemName: travel.transportIcon)
+                            .font(.caption)
+                            .foregroundStyle(.cyan)
+                        Text(travel.summary)
+                            .font(.caption)
+                            .foregroundStyle(.cyan)
                     }
                 }
             }

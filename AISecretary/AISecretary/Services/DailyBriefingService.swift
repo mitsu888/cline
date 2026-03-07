@@ -2,7 +2,7 @@ import Foundation
 import SwiftData
 
 /// AI秘書のプロアクティブ機能を管理するサービス
-/// - 日次スケジュール報告の生成
+/// - 日次スケジュール報告の生成（エネルギーレベル・移動時間・習慣考慮）
 /// - タスク優先度の自動調整
 /// - 低優先度タスクの「箱入れ」（アーカイブ）
 /// - こなせない量の検知と提案
@@ -17,10 +17,14 @@ final class DailyBriefingService: ObservableObject {
         self.apiService = ClaudeAPIService(apiKey: apiKey)
     }
 
-    /// 毎朝の日次報告を生成
+    /// 毎朝の日次報告を生成（エネルギーレベル・習慣情報込み）
     func generateDailyBriefing(
         schedules: [ScheduleItem],
         tasks: [TaskItem],
+        habits: [HabitItem],
+        habitLogs: [HabitLog],
+        energyProfile: EnergyProfile?,
+        travelTimes: [UUID: TravelTimeResult],
         userName: String
     ) async throws -> DailyBriefing {
         guard let apiService else { throw ClaudeError.noAPIKey }
@@ -40,8 +44,16 @@ final class DailyBriefingService: ObservableObject {
             return due.isToday
         }
 
-        let scheduleList = todaySchedules.map {
-            "- \($0.startDate.shortTimeString) \($0.title) [\($0.priority.label)]"
+        // スケジュールリスト（移動時間付き）
+        let scheduleList = todaySchedules.map { schedule in
+            var line = "- \(schedule.startDate.shortTimeString) \(schedule.title) [\(schedule.priority.label)]"
+            if !schedule.location.isEmpty {
+                line += " [場所: \(schedule.location)]"
+            }
+            if let travel = travelTimes[schedule.id] {
+                line += " [移動時間: 約\(travel.travelTimeMinutes)分, \(travel.distanceText)]"
+            }
+            return line
         }.joined(separator: "\n")
 
         let tomorrowList = tomorrowSchedules.map {
@@ -54,6 +66,30 @@ final class DailyBriefingService: ObservableObject {
 
         let overdueList = overdueTasks.map {
             "- \($0.title) (期限: \($0.dueDate!.shortDateString))"
+        }.joined(separator: "\n")
+
+        // エネルギー情報
+        let energyInfo: String
+        if let profile = energyProfile {
+            let peakHoursStr = profile.peakHours.map { "\($0)時" }.joined(separator: ", ")
+            energyInfo = """
+            タイプ: \(profile.chronotype.label)
+            ピーク時間帯: \(peakHoursStr)
+            重要タスクの推奨時間: \(profile.recommendedTimeSlot(for: .high))
+            """
+        } else {
+            energyInfo = "未設定"
+        }
+
+        // 習慣情報
+        let activeHabits = habits.filter { $0.isActive }
+        let todayHabitLogs = habitLogs.filter { Calendar.current.isDateInToday($0.date) }
+        let completedHabits = activeHabits.filter { habit in
+            todayHabitLogs.contains { $0.habitId == habit.id && $0.isCompleted }
+        }
+        let habitInfo = activeHabits.map { habit in
+            let completed = completedHabits.contains { $0.id == habit.id }
+            return "- \(habit.title) (\(habit.durationMinutes)分/\(habit.preferredTimeSlot.shortLabel)) [達成: \(completed ? "済" : "未")] [連続: \(habit.currentStreak)日]"
         }.joined(separator: "\n")
 
         let prompt = """
@@ -74,12 +110,21 @@ final class DailyBriefingService: ObservableObject {
         ## 今日が期限のタスク (\(todayTasks.count)件):
         \(todayTasks.map { "- \($0.title)" }.joined(separator: "\n"))
 
+        ## エネルギープロファイル:
+        \(energyInfo)
+
+        ## 習慣トラッカー (\(activeHabits.count)件中\(completedHabits.count)件達成):
+        \(habitInfo.isEmpty ? "なし" : habitInfo)
+
         以下の形式でJSON応答してください:
         ```json
         {
             "greeting": "おはようございます、○○さん。今日の報告です。",
-            "schedule_summary": "今日のスケジュール概要（自然な日本語で）",
-            "task_summary": "タスク状況の概要",
+            "schedule_summary": "今日のスケジュール概要（移動時間の注意も含めて）",
+            "task_summary": "タスク状況の概要（エネルギーレベルに基づく配置提案を含む）",
+            "habit_summary": "習慣の達成状況と提案",
+            "energy_advice": "エネルギーレベルに基づく今日の過ごし方アドバイス",
+            "travel_warnings": ["移動時間に関する注意事項"],
             "overload_detected": true/false,
             "recommendations": ["提案1", "提案2"],
             "tasks_to_archive": [{"title": "タスク名", "reason": "理由"}],
@@ -92,7 +137,10 @@ final class DailyBriefingService: ObservableObject {
         - タスクが多すぎて1日でこなせない場合は overload_detected を true にする
         - 優先度の低いタスクは tasks_to_archive で「箱にしまう」提案をする
         - 期限超過タスクがあれば最優先で対応を提案する
-        - スケジュールの隙間時間を活用した提案もする
+        - エネルギーのピーク時間帯に重要タスクを配置する提案をする
+        - 移動時間がある場合、出発時刻の注意を含める
+        - 習慣の連続達成日数が途切れそうなら注意を促す
+        - スケジュールの隙間時間に習慣を入れる提案もする
         """
 
         let messages = [ClaudeAPIService.APIMessage(role: "user", content: prompt)]
@@ -142,6 +190,9 @@ final class DailyBriefingService: ObservableObject {
                 greeting: "おはようございます。今日も頑張りましょう。",
                 scheduleSummary: "本日の予定は\(todayScheduleCount)件です。",
                 taskSummary: "未完了タスクは\(pendingTaskCount)件です。",
+                habitSummary: "",
+                energyAdvice: "",
+                travelWarnings: [],
                 overloadDetected: false,
                 recommendations: [],
                 tasksToArchive: [],
@@ -154,6 +205,9 @@ final class DailyBriefingService: ObservableObject {
             greeting: json["greeting"] as? String ?? "おはようございます。",
             scheduleSummary: json["schedule_summary"] as? String ?? "",
             taskSummary: json["task_summary"] as? String ?? "",
+            habitSummary: json["habit_summary"] as? String ?? "",
+            energyAdvice: json["energy_advice"] as? String ?? "",
+            travelWarnings: json["travel_warnings"] as? [String] ?? [],
             overloadDetected: json["overload_detected"] as? Bool ?? false,
             recommendations: json["recommendations"] as? [String] ?? [],
             tasksToArchive: (json["tasks_to_archive"] as? [[String: String]])?.map {
@@ -171,6 +225,9 @@ struct DailyBriefing {
     let greeting: String
     let scheduleSummary: String
     let taskSummary: String
+    let habitSummary: String
+    let energyAdvice: String
+    let travelWarnings: [String]
     let overloadDetected: Bool
     let recommendations: [String]
     let tasksToArchive: [ArchiveSuggestion]
