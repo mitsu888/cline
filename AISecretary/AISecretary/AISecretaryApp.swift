@@ -18,6 +18,7 @@ struct AISecretaryApp: App {
             HabitItem.self,
             HabitLog.self,
             DailyReflection.self,
+            PriorityLearningRecord.self,
         ])
         let config = ModelConfiguration(
             schema: schema,

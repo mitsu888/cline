@@ -6,7 +6,9 @@ struct ScheduleView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \ScheduleItem.startDate) private var schedules: [ScheduleItem]
     @StateObject private var travelTimeService = TravelTimeService()
+    @StateObject private var calendarSync = CalendarSyncService.shared
     @State private var showAddSheet = false
+    @State private var showCalendarSync = false
     @State private var selectedDate = Date()
     @State private var travelTimes: [UUID: TravelTimeResult] = [:]
 
@@ -14,6 +16,16 @@ struct ScheduleView: View {
         schedules.filter { schedule in
             Calendar.current.isDate(schedule.startDate, inSameDayAs: selectedDate)
         }
+    }
+
+    var filteredExternalEvents: [ExternalCalendarEvent] {
+        calendarSync.syncedEvents.filter { event in
+            Calendar.current.isDate(event.startDate, inSameDayAs: selectedDate)
+        }
+    }
+
+    var hasAnyEvents: Bool {
+        !filteredSchedules.isEmpty || !filteredExternalEvents.isEmpty
     }
 
     var body: some View {
@@ -25,7 +37,7 @@ struct ScheduleView: View {
 
                 Divider()
 
-                if filteredSchedules.isEmpty {
+                if !hasAnyEvents {
                     ContentUnavailableView(
                         "予定なし",
                         systemImage: "calendar.badge.plus",
@@ -33,13 +45,27 @@ struct ScheduleView: View {
                     )
                 } else {
                     List {
-                        ForEach(filteredSchedules, id: \.id) { schedule in
-                            ScheduleRow(
-                                schedule: schedule,
-                                travelTime: travelTimes[schedule.id]
-                            )
+                        // アプリ内スケジュール
+                        if !filteredSchedules.isEmpty {
+                            Section("アプリ内の予定") {
+                                ForEach(filteredSchedules, id: \.id) { schedule in
+                                    ScheduleRow(
+                                        schedule: schedule,
+                                        travelTime: travelTimes[schedule.id]
+                                    )
+                                }
+                                .onDelete(perform: deleteSchedules)
+                            }
                         }
-                        .onDelete(perform: deleteSchedules)
+
+                        // 外部カレンダーイベント
+                        if !filteredExternalEvents.isEmpty {
+                            Section("外部カレンダー") {
+                                ForEach(filteredExternalEvents) { event in
+                                    ExternalEventRow(event: event)
+                                }
+                            }
+                        }
                     }
                     .listStyle(.plain)
                 }
@@ -50,21 +76,35 @@ struct ScheduleView: View {
             #endif
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        showAddSheet = true
-                    } label: {
-                        Image(systemName: "plus")
+                    HStack(spacing: 12) {
+                        Button {
+                            showCalendarSync = true
+                        } label: {
+                            Image(systemName: "calendar.badge.clock")
+                        }
+                        Button {
+                            showAddSheet = true
+                        } label: {
+                            Image(systemName: "plus")
+                        }
                     }
                 }
             }
             .sheet(isPresented: $showAddSheet) {
                 AddScheduleView(selectedDate: selectedDate)
             }
+            .sheet(isPresented: $showCalendarSync) {
+                CalendarSyncView()
+            }
             .onChange(of: selectedDate) { _, _ in
-                Task { await calculateTravelTimes() }
+                Task {
+                    await calculateTravelTimes()
+                    await calendarSync.syncEventsForDate(selectedDate)
+                }
             }
             .task {
                 await calculateTravelTimes()
+                await calendarSync.syncEventsForDate(selectedDate)
             }
         }
     }
@@ -248,5 +288,58 @@ struct AddScheduleView: View {
         if reminderEnabled {
             NotificationService.shared.scheduleReminder(for: schedule)
         }
+    }
+}
+
+// MARK: - 外部カレンダーイベント行
+
+struct ExternalEventRow: View {
+    let event: ExternalCalendarEvent
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Rectangle()
+                .fill(Color.purple.opacity(0.7))
+                .frame(width: 4)
+                .clipShape(RoundedRectangle(cornerRadius: 2))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(event.title)
+                    .font(.headline)
+
+                HStack {
+                    Image(systemName: "clock")
+                        .font(.caption)
+                    Text(event.timeRange)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                if let location = event.location, !location.isEmpty {
+                    HStack {
+                        Image(systemName: "mappin")
+                            .font(.caption)
+                        Text(location)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                HStack(spacing: 4) {
+                    Image(systemName: event.sourceIcon)
+                        .font(.caption2)
+                    Text(event.calendarName)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+
+            Spacer()
+
+            Image(systemName: "arrow.up.right.square")
+                .font(.caption)
+                .foregroundStyle(.purple.opacity(0.6))
+        }
+        .padding(.vertical, 4)
     }
 }

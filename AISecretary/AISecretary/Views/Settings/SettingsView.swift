@@ -65,6 +65,35 @@ struct SettingsView: View {
                     }
                 }
 
+                // カレンダー連携
+                Section("カレンダー連携") {
+                    NavigationLink {
+                        CalendarSyncView()
+                    } label: {
+                        HStack {
+                            Image(systemName: "calendar.badge.clock")
+                                .foregroundStyle(.purple)
+                            Text("Google / Apple カレンダー同期")
+                        }
+                    }
+                    Text("iOSのカレンダーアカウント設定でGoogleアカウントを追加すると、Google Calendarの予定も表示されます。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                // AI優先度学習
+                Section("AI優先度学習") {
+                    NavigationLink {
+                        PriorityLearningSettingsView()
+                    } label: {
+                        HStack {
+                            Image(systemName: "brain.head.profile")
+                                .foregroundStyle(.indigo)
+                            Text("自動優先度学習設定")
+                        }
+                    }
+                }
+
                 Section("通知") {
                     Toggle("通知を有効にする", isOn: $notificationEnabled)
                         .onChange(of: notificationEnabled) { _, enabled in

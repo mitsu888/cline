@@ -4,6 +4,7 @@ import SwiftData
 struct TaskListView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \TaskItem.createdAt, order: .reverse) private var tasks: [TaskItem]
+    @StateObject private var learningService = PriorityLearningService()
     @State private var showAddSheet = false
     @State private var filterCompleted = false
 
@@ -36,7 +37,7 @@ struct TaskListView: View {
                         ForEach(groupedTasks, id: \.0) { priority, items in
                             Section(priority.label) {
                                 ForEach(items, id: \.id) { task in
-                                    TaskRow(task: task)
+                                    TaskRow(task: task, learningService: learningService)
                                 }
                                 .onDelete { offsets in
                                     deleteTasks(items: items, at: offsets)
@@ -63,7 +64,7 @@ struct TaskListView: View {
                 }
             }
             .sheet(isPresented: $showAddSheet) {
-                AddTaskView()
+                AddTaskView(learningService: learningService)
             }
         }
     }
@@ -78,13 +79,19 @@ struct TaskListView: View {
 }
 
 struct TaskRow: View {
+    @Environment(\.modelContext) private var modelContext
     @Bindable var task: TaskItem
+    var learningService: PriorityLearningService?
 
     var body: some View {
         HStack(spacing: 12) {
             Button {
                 withAnimation {
                     task.toggleComplete()
+                    // 完了時に学習データを記録
+                    if task.isCompleted, let service = learningService {
+                        service.recordTaskCompletion(task: task, context: modelContext)
+                    }
                 }
             } label: {
                 Image(systemName: task.isCompleted ? "checkmark.circle.fill" : "circle")
@@ -94,10 +101,19 @@ struct TaskRow: View {
             .buttonStyle(.plain)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(task.title)
-                    .font(.body)
-                    .strikethrough(task.isCompleted)
-                    .foregroundStyle(task.isCompleted ? .secondary : .primary)
+                HStack(spacing: 4) {
+                    Text(task.title)
+                        .font(.body)
+                        .strikethrough(task.isCompleted)
+                        .foregroundStyle(task.isCompleted ? .secondary : .primary)
+
+                    // AI提案バッジ
+                    if task.isPrioritySuggested {
+                        Image(systemName: "brain.head.profile")
+                            .font(.caption2)
+                            .foregroundStyle(.indigo)
+                    }
+                }
 
                 if !task.detail.isEmpty {
                     Text(task.detail)
@@ -127,13 +143,54 @@ struct AddTaskView: View {
     @State private var hasDueDate = false
     @State private var dueDate = Date()
     @State private var priority: Priority = .normal
+    @State private var suggestion: PrioritySuggestion?
+    @State private var usedSuggestion = false
+
+    var learningService: PriorityLearningService?
 
     var body: some View {
         NavigationStack {
             Form {
                 TextField("タスク名", text: $title)
+                    .onChange(of: title) { _, newTitle in
+                        updateSuggestion(for: newTitle)
+                    }
                 TextField("詳細", text: $detail, axis: .vertical)
                     .lineLimit(3)
+
+                // AI優先度提案
+                if let suggestion = suggestion {
+                    Section {
+                        Button {
+                            priority = suggestion.priority
+                            usedSuggestion = true
+                        } label: {
+                            HStack {
+                                Image(systemName: "brain.head.profile")
+                                    .foregroundStyle(.indigo)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("提案: \(suggestion.priority.label)")
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+                                    Text(suggestion.reason)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Text(suggestion.confidenceLabel)
+                                    .font(.caption2)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Color.indigo.opacity(0.1))
+                                    .foregroundStyle(.indigo)
+                                    .clipShape(Capsule())
+                            }
+                        }
+                        .tint(.primary)
+                    } header: {
+                        Text("AI優先度提案")
+                    }
+                }
 
                 Section {
                     Toggle("期限を設定", isOn: $hasDueDate)
@@ -162,7 +219,9 @@ struct AddTaskView: View {
                             title: title,
                             detail: detail,
                             dueDate: hasDueDate ? dueDate : nil,
-                            priority: priority
+                            priority: priority,
+                            isPrioritySuggested: usedSuggestion,
+                            priorityConfidence: usedSuggestion ? (suggestion?.confidence ?? 0) : 0
                         )
                         modelContext.insert(task)
                         if hasDueDate {
@@ -174,5 +233,13 @@ struct AddTaskView: View {
                 }
             }
         }
+    }
+
+    private func updateSuggestion(for newTitle: String) {
+        guard let service = learningService, newTitle.count >= 3 else {
+            suggestion = nil
+            return
+        }
+        suggestion = service.suggestPriority(for: newTitle, context: modelContext)
     }
 }
