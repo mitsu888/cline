@@ -90,10 +90,22 @@ struct ChatView: View {
             }
 
             if let error = viewModel.errorMessage {
-                Text(error)
+                HStack {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.yellow)
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                    Spacer()
+                    Button("閉じる") {
+                        viewModel.errorMessage = nil
+                    }
                     .font(.caption)
-                    .foregroundStyle(.red)
-                    .padding(.horizontal)
+                }
+                .padding(10)
+                .background(Color.red.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .padding(.horizontal)
             }
 
             inputBar
@@ -119,7 +131,11 @@ struct ChatView: View {
                     .textFieldStyle(.plain)
                     .lineLimit(1...5)
                     .padding(10)
+                    #if os(macOS)
+                    .background(Color(nsColor: .controlBackgroundColor))
+                    #else
                     .background(Color(.systemGray6))
+                    #endif
                     .clipShape(RoundedRectangle(cornerRadius: 20))
 
                 Button {
@@ -144,7 +160,11 @@ struct ChatView: View {
                     .font(.subheadline)
                     .padding(8)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    #if os(macOS)
+                    .background(Color(nsColor: .controlBackgroundColor))
+                    #else
                     .background(Color(.systemGray6))
+                    #endif
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .padding(.horizontal)
             }
@@ -194,16 +214,37 @@ struct ChatBubble: View {
 
     var isUser: Bool { message.role == .user }
 
+    private var bubbleBackground: Color {
+        if isUser {
+            return .indigo
+        }
+        #if os(macOS)
+        return Color(nsColor: .controlBackgroundColor)
+        #else
+        return Color(.systemGray5)
+        #endif
+    }
+
     var body: some View {
         HStack {
             if isUser { Spacer(minLength: 48) }
 
             VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
-                Text(message.content)
-                    .padding(12)
-                    .background(isUser ? Color.indigo : Color(.systemGray5))
-                    .foregroundStyle(isUser ? .white : .primary)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                if message.content.isEmpty {
+                    Text("（応答なし）")
+                        .italic()
+                        .foregroundStyle(.secondary)
+                        .padding(12)
+                        .background(bubbleBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                } else {
+                    Text(message.content)
+                        .textSelection(.enabled)
+                        .padding(12)
+                        .background(bubbleBackground)
+                        .foregroundStyle(isUser ? .white : .primary)
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                }
 
                 Text(message.timestamp.shortTimeString)
                     .font(.caption2)
@@ -236,10 +277,3 @@ struct TypingIndicator: View {
     }
 }
 
-#if os(macOS)
-extension Color {
-    static func systemGray6() -> Color {
-        Color(nsColor: .controlBackgroundColor)
-    }
-}
-#endif

@@ -81,14 +81,21 @@ actor ClaudeAPIService {
 
     func sendMessage(messages: [APIMessage]) async throws -> String {
         guard !apiKey.isEmpty else {
+            print("[AISecretary] エラー: APIキーが空です")
             throw ClaudeError.noAPIKey
         }
 
-        var request = URLRequest(url: URL(string: baseURL)!)
+        guard let url = URL(string: baseURL) else {
+            print("[AISecretary] エラー: 無効なURL")
+            throw ClaudeError.invalidResponse
+        }
+
+        var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.timeoutInterval = 60
 
         let body = APIRequest(
             model: model,
@@ -98,21 +105,51 @@ actor ClaudeAPIService {
         )
         request.httpBody = try JSONEncoder().encode(body)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        print("[AISecretary] API呼び出し開始: モデル=\(model), メッセージ数=\(messages.count)")
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            print("[AISecretary] ネットワークエラー: \(error.localizedDescription)")
+            throw ClaudeError.networkError(error.localizedDescription)
+        }
 
         guard let httpResponse = response as? HTTPURLResponse else {
+            print("[AISecretary] エラー: HTTPレスポンスではありません")
             throw ClaudeError.invalidResponse
         }
 
+        print("[AISecretary] HTTPステータス: \(httpResponse.statusCode)")
+
         if httpResponse.statusCode != 200 {
+            let responseBody = String(data: data, encoding: .utf8) ?? "(読み取り不可)"
+            print("[AISecretary] APIエラーレスポンス: \(responseBody)")
             if let apiError = try? JSONDecoder().decode(APIError.self, from: data) {
                 throw ClaudeError.apiError(apiError.error.message)
             }
             throw ClaudeError.httpError(httpResponse.statusCode)
         }
 
-        let apiResponse = try JSONDecoder().decode(APIResponse.self, from: data)
-        return apiResponse.content.compactMap(\.text).joined()
+        let apiResponse: APIResponse
+        do {
+            apiResponse = try JSONDecoder().decode(APIResponse.self, from: data)
+        } catch {
+            let responseBody = String(data: data, encoding: .utf8) ?? "(読み取り不可)"
+            print("[AISecretary] JSONデコードエラー: \(error), レスポンス: \(responseBody)")
+            throw ClaudeError.parseError
+        }
+
+        let result = apiResponse.content.compactMap(\.text).joined()
+        if result.isEmpty {
+            print("[AISecretary] 警告: APIレスポンスのテキストが空です")
+            let responseBody = String(data: data, encoding: .utf8) ?? "(読み取り不可)"
+            print("[AISecretary] 生レスポンス: \(responseBody)")
+        } else {
+            print("[AISecretary] 応答受信: \(result.prefix(100))...")
+        }
+        return result
     }
 
     func analyzeVoiceMemo(transcription: String) async throws -> VoiceMemoAnalysis {
@@ -169,14 +206,16 @@ enum ClaudeError: LocalizedError {
     case httpError(Int)
     case apiError(String)
     case parseError
+    case networkError(String)
 
     var errorDescription: String? {
         switch self {
-        case .noAPIKey: "APIキーが設定されていません"
+        case .noAPIKey: "APIキーが設定されていません。設定画面でAPIキーを入力してください。"
         case .invalidResponse: "無効なレスポンスです"
-        case .httpError(let code): "HTTP エラー: \(code)"
+        case .httpError(let code): "HTTP エラー: \(code). APIキーやネットワーク設定を確認してください。"
         case .apiError(let msg): "API エラー: \(msg)"
         case .parseError: "レスポンスの解析に失敗しました"
+        case .networkError(let msg): "ネットワークエラー: \(msg). インターネット接続を確認してください。macOSの場合、Xcodeの「Signing & Capabilities」で「Outgoing Connections (Client)」を有効にしてください。"
         }
     }
 }

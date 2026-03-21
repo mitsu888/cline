@@ -50,18 +50,29 @@ final class ChatViewModel: ObservableObject {
 
             let response = try await apiService.sendMessage(messages: apiMessages)
 
+            guard !response.isEmpty else {
+                print("[AISecretary] 空の応答を受信しました")
+                errorMessage = "AIからの応答が空でした。APIキーとネットワーク接続を確認してください。"
+                return
+            }
+
             let assistantMessage = ChatMessage(role: .assistant, content: response)
             modelContext.insert(assistantMessage)
             if let conversation = currentConversation {
                 assistantMessage.conversation = conversation
                 conversation.messages.append(assistantMessage)
                 conversation.updatedAt = Date()
+                // 最初のメッセージならタイトルを更新
+                if conversation.title == "新しい会話" {
+                    conversation.title = String(text.prefix(20))
+                }
             }
 
             parseAndExecuteActions(from: response, modelContext: modelContext)
 
             try? modelContext.save()
         } catch {
+            print("[AISecretary] sendMessage エラー: \(error)")
             errorMessage = error.localizedDescription
         }
     }
