@@ -1,5 +1,14 @@
 import Foundation
 
+enum DateFormatters {
+    static let isoDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        return formatter
+    }()
+}
+
 extension Date {
     var shortDateString: String {
         let formatter = DateFormatter()

@@ -10,6 +10,9 @@ struct MemoListView: View {
     @State private var showVoiceMemo = false
     @State private var isAnalyzing = false
     @State private var searchText = ""
+    @State private var promiseCandidates: [PromiseCandidate] = []
+    @State private var showPromiseCandidates = false
+    @State private var lastMemoTitle = ""
 
     var filteredMemos: [Memo] {
         if searchText.isEmpty { return memos }
@@ -66,6 +69,12 @@ struct MemoListView: View {
                     saveMemo(from: transcription)
                 }
             }
+            .sheet(isPresented: $showPromiseCandidates) {
+                PromiseCandidateView(
+                    candidates: promiseCandidates,
+                    memoTitle: lastMemoTitle
+                )
+            }
         }
     }
 
@@ -82,10 +91,21 @@ struct MemoListView: View {
         if appState.isAPIKeySet {
             Task {
                 let service = ClaudeAPIService(apiKey: appState.apiKey)
-                if let analysis = try? await service.analyzeVoiceMemo(transcription: transcription) {
+
+                // 分析と約束抽出を並行実行
+                async let analysisResult = service.analyzeVoiceMemo(transcription: transcription)
+                async let promisesResult = service.extractPromises(transcription: transcription)
+
+                if let analysis = try? await analysisResult {
                     memo.priority = analysis.priority
                     memo.title = analysis.summary.prefix(50).description
                     try? modelContext.save()
+                }
+
+                if let promises = try? await promisesResult, !promises.isEmpty {
+                    lastMemoTitle = memo.title
+                    promiseCandidates = promises
+                    showPromiseCandidates = true
                 }
             }
         }

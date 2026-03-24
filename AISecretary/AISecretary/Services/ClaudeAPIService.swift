@@ -174,6 +174,84 @@ actor ClaudeAPIService {
         return try parseVoiceMemoAnalysis(response)
     }
 
+    /// ボイスメモから「約束」（スケジュール候補）を自動抽出
+    func extractPromises(transcription: String) async throws -> [PromiseCandidate] {
+        let today = DateFormatters.isoDateFormatter.string(from: Date())
+        let prompt = """
+        以下の音声メモから、約束・予定・スケジュールに関する情報を抽出してください。
+        今日の日付: \(today)
+
+        音声メモ:
+        「\(transcription)」
+
+        以下の形式でJSON応答してください。約束が見つからない場合は空配列を返してください:
+        ```json
+        {
+            "promises": [
+                {
+                    "title": "予定のタイトル",
+                    "person": "相手の名前（不明なら空文字）",
+                    "date": "YYYY-MM-DD（推測含む。「来週の水曜」等は具体的な日付に変換）",
+                    "time": "HH:mm（不明なら空文字）",
+                    "duration_minutes": 60,
+                    "location": "場所（不明なら空文字）",
+                    "detail": "詳細メモ",
+                    "confidence": 0.9
+                }
+            ]
+        }
+        ```
+
+        重要なルール:
+        - 「来週の水曜」「明後日」「今度の金曜」等の相対日付は、今日(\(today))を基準に具体的な日付に変換する
+        - 「ランチ」→12:00、「夕食」「ディナー」→19:00、「朝」→9:00 等、時間が明示されていなくても推測する
+        - confidence は抽出の確信度（0.0〜1.0）。明確な約束は0.8以上、推測が多い場合は低く設定
+        - 人名、場所、日時のいずれかが含まれていれば約束候補として抽出する
+        """
+
+        let messages = [APIMessage(role: "user", content: prompt)]
+        let response = try await sendMessage(messages: messages)
+        return try parsePromises(response)
+    }
+
+    private func parsePromises(_ response: String) throws -> [PromiseCandidate] {
+        guard let jsonRange = response.range(of: "```json"),
+              let endRange = response.range(of: "```", range: jsonRange.upperBound..<response.endIndex) else {
+            return []
+        }
+
+        let jsonString = String(response[jsonRange.upperBound..<endRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let jsonData = jsonString.data(using: .utf8) else {
+            return []
+        }
+
+        let decoded = try JSONDecoder().decode(PromisesDTO.self, from: jsonData)
+        let calendar = Calendar.current
+
+        return decoded.promises.compactMap { dto in
+            let dateFormatter = DateFormatters.isoDateFormatter
+            guard let date = dateFormatter.date(from: dto.date) else { return nil }
+
+            var startDate = date
+            if !dto.time.isEmpty {
+                let parts = dto.time.split(separator: ":").compactMap { Int($0) }
+                if parts.count == 2 {
+                    startDate = calendar.date(bySettingHour: parts[0], minute: parts[1], second: 0, of: date) ?? date
+                }
+            }
+
+            return PromiseCandidate(
+                title: dto.title,
+                person: dto.person,
+                startDate: startDate,
+                durationMinutes: dto.duration_minutes,
+                location: dto.location,
+                detail: dto.detail,
+                confidence: dto.confidence
+            )
+        }
+    }
+
     private func parseVoiceMemoAnalysis(_ response: String) throws -> VoiceMemoAnalysis {
         guard let jsonRange = response.range(of: "```json"),
               let endRange = response.range(of: "```", range: jsonRange.upperBound..<response.endIndex) else {
@@ -242,6 +320,42 @@ struct VoiceMemoAnalysisDTO: Decodable {
         let title: String
         let detail: String?
     }
+}
+
+struct PromiseCandidate: Identifiable {
+    let id = UUID()
+    let title: String
+    let person: String
+    let startDate: Date
+    let durationMinutes: Int
+    let location: String
+    let detail: String
+    let confidence: Double
+
+    var endDate: Date {
+        startDate.addingTimeInterval(TimeInterval(durationMinutes * 60))
+    }
+
+    var confidenceLabel: String {
+        if confidence >= 0.8 { return "高確度" }
+        if confidence >= 0.5 { return "推測あり" }
+        return "低確度"
+    }
+}
+
+struct PromisesDTO: Decodable {
+    let promises: [PromiseDTO]
+}
+
+struct PromiseDTO: Decodable {
+    let title: String
+    let person: String
+    let date: String
+    let time: String
+    let duration_minutes: Int
+    let location: String
+    let detail: String
+    let confidence: Double
 }
 
 extension Priority {
