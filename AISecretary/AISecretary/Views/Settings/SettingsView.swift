@@ -94,6 +94,44 @@ struct SettingsView: View {
                     }
                 }
 
+                // マネージャーモード
+                Section("マネージャーモード") {
+                    Toggle("マネージャーモードを有効にする", isOn: $appState.managerModeEnabled)
+
+                    if appState.managerModeEnabled {
+                        HStack {
+                            Image(systemName: "person.fill")
+                                .foregroundStyle(.indigo)
+                            Text("芸能人のマネージャーのように、出発時刻を逆算して段階的にお知らせします。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Stepper("準備時間: \(appState.prepTimeMinutes)分", value: $appState.prepTimeMinutes, in: 5...60, step: 5)
+
+                        Picker("交通手段", selection: $appState.preferredTransport) {
+                            ForEach(TransportMode.allCases, id: \.self) { mode in
+                                Label(mode.label, systemImage: mode.icon).tag(mode)
+                            }
+                        }
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("通知の流れ:")
+                                .font(.caption)
+                                .fontWeight(.medium)
+                            Text("1. 準備開始 → 出発\(appState.prepTimeMinutes)分前")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text("2. 出発催促 → 移動時間+余裕10分から逆算")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text("3. 急ぎ通知 → 出発時刻5分経過時")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
                 Section("通知") {
                     Toggle("通知を有効にする", isOn: $notificationEnabled)
                         .onChange(of: notificationEnabled) { _, enabled in

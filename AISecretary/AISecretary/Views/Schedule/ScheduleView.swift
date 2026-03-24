@@ -109,11 +109,14 @@ struct ScheduleView: View {
         }
     }
 
+    private let managerService = ManagerNotificationService()
+
     private func deleteSchedules(at offsets: IndexSet) {
         for index in offsets {
             let schedule = filteredSchedules[index]
             NotificationService.shared.cancelNotification(id: "schedule-\(schedule.id)")
             NotificationService.shared.cancelNotification(id: "travel-\(schedule.id)")
+            managerService.cancelManagerAlerts(for: schedule.id)
             modelContext.delete(schedule)
         }
     }
@@ -129,6 +132,16 @@ struct ScheduleView: View {
             _ = await travelTimeService.calculateAndNotify(
                 currentLocation: appState.defaultLocation,
                 nextSchedule: schedule
+            )
+        }
+
+        // マネージャーモードの段階通知をセットアップ
+        if appState.managerModeEnabled && !appState.defaultLocation.isEmpty {
+            await managerService.setupAlertsForTodaySchedules(
+                schedules: filteredSchedules,
+                homeLocation: appState.defaultLocation,
+                prepTimeMinutes: appState.prepTimeMinutes,
+                transportType: appState.preferredTransport.mkTransportType
             )
         }
     }
@@ -206,6 +219,7 @@ struct ScheduleRow: View {
 
 struct AddScheduleView: View {
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) private var dismiss
     let selectedDate: Date
 
@@ -287,6 +301,19 @@ struct AddScheduleView: View {
         modelContext.insert(schedule)
         if reminderEnabled {
             NotificationService.shared.scheduleReminder(for: schedule)
+        }
+
+        // マネージャーモード: 新しい予定に対して段階通知をセットアップ
+        if appState.managerModeEnabled && !location.isEmpty && !appState.defaultLocation.isEmpty {
+            let managerService = ManagerNotificationService()
+            Task {
+                await managerService.setupManagerAlerts(
+                    for: schedule,
+                    homeLocation: appState.defaultLocation,
+                    prepTimeMinutes: appState.prepTimeMinutes,
+                    transportType: appState.preferredTransport.mkTransportType
+                )
+            }
         }
     }
 }

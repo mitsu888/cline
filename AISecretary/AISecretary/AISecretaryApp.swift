@@ -39,12 +39,38 @@ struct AISecretaryApp: App {
                 .modelContainer(sharedModelContainer)
                 .onAppear {
                     setupEveningReminder()
+                    setupManagerNotifications()
                 }
         }
         #if os(macOS)
         .windowStyle(.titleBar)
         .defaultSize(width: 1100, height: 750)
         #endif
+    }
+
+    private func setupManagerNotifications() {
+        guard appState.managerModeEnabled, !appState.defaultLocation.isEmpty else { return }
+
+        let context = sharedModelContainer.mainContext
+        let today = Calendar.current.startOfDay(for: Date())
+        let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: today)!
+        let predicate = #Predicate<ScheduleItem> {
+            $0.startDate >= today && $0.startDate < tomorrow
+        }
+
+        guard let schedules = try? context.fetch(
+            FetchDescriptor<ScheduleItem>(predicate: predicate, sortBy: [SortDescriptor(\.startDate)])
+        ) else { return }
+
+        let managerService = ManagerNotificationService()
+        Task {
+            await managerService.setupAlertsForTodaySchedules(
+                schedules: schedules,
+                homeLocation: appState.defaultLocation,
+                prepTimeMinutes: appState.prepTimeMinutes,
+                transportType: appState.preferredTransport.mkTransportType
+            )
+        }
     }
 
     private func setupEveningReminder() {
