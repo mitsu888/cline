@@ -1,2 +1,5 @@
 deep-translator>=1.11.0
 pyperclip>=1.8.0
+Pillow>=10.0.0
+mss>=9.0.0
+pytesseract>=0.3.10
