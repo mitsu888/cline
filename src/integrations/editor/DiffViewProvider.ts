@@ -22,7 +22,7 @@ export abstract class DiffViewProvider {
 	private preDiagnostics: FileDiagnostics[] = []
 	protected relPath?: string
 	protected absolutePath?: string
-	protected fileEncoding: string = "utf8"
+	protected fileEncoding = "utf8"
 	private streamedLines: string[] = []
 	private newContent?: string
 
@@ -34,7 +34,7 @@ export abstract class DiffViewProvider {
 		const absolutePathResolved = workspaceResolver.resolveWorkspacePath(cwd, relPath, "DiffViewProvider.open.absolutePath")
 		this.absolutePath = typeof absolutePathResolved === "string" ? absolutePathResolved : absolutePathResolved.absolutePath
 		this.relPath = options?.displayPath ?? relPath
-		const fileExists = this.editType === "modify"
+		const fileExists = this.editType === "modify" || this.editType === "delete"
 
 		// if the file is already open, ensure it's not dirty before getting its contents
 		if (fileExists) {
@@ -158,7 +158,7 @@ export abstract class DiffViewProvider {
 	 *
 	 * @returns true if the file was saved.
 	 */
-	protected abstract saveDocument(): Promise<Boolean>
+	protected abstract saveDocument(): Promise<boolean>
 
 	/**
 	 * Closes all open diff views.
@@ -407,7 +407,7 @@ export abstract class DiffViewProvider {
 		if (!this.absolutePath || !this.isEditing) {
 			return
 		}
-		const fileExists = this.editType === "modify"
+		const fileExists = this.editType === "modify" || this.editType === "delete"
 
 		if (!fileExists) {
 			// This is a load-bearing save statement- even though the file is saved and then immediately deleted.

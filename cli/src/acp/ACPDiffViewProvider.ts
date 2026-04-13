@@ -109,7 +109,7 @@ export class ACPDiffViewProvider extends FileEditProvider {
 		const absolutePathResolved = workspaceResolver.resolveWorkspacePath(cwd, relPath, "ACPDiffViewProvider.open.absolutePath")
 		this.absolutePath = typeof absolutePathResolved === "string" ? absolutePathResolved : absolutePathResolved.absolutePath
 		this.relPath = options?.displayPath ?? relPath
-		const fileExists = this.editType === "modify"
+		const fileExists = this.editType === "modify" || this.editType === "delete"
 
 		// Read file content
 		if (fileExists) {
@@ -211,7 +211,7 @@ export class ACPDiffViewProvider extends FileEditProvider {
 	 * content via the ACP connection. Otherwise, it falls back to the
 	 * FileEditProvider's local fs implementation.
 	 */
-	protected override async saveDocument(): Promise<Boolean> {
+	protected override async saveDocument(): Promise<boolean> {
 		// If we can't write files via ACP, fall back to FileEditProvider
 		if (!this.canWriteFile()) {
 			Logger.debug("[ACPDiffViewProvider] Client does not support fs.writeTextFile, falling back to local fs")

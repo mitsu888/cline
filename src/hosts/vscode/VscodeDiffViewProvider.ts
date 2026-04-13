@@ -57,7 +57,8 @@ export class VscodeDiffViewProvider extends DiffViewProvider {
 			// Open new diff editor.
 			this.activeDiffEditor = await new Promise<vscode.TextEditor>((resolve, reject) => {
 				const fileName = path.basename(uri.fsPath)
-				const fileExists = this.editType === "modify"
+				const isDelete = this.editType === "delete"
+				const fileExists = this.editType === "modify" || isDelete
 				const disposable = vscode.window.onDidChangeActiveTextEditor((editor) => {
 					if (editor && arePathsEqual(editor.document.uri.fsPath, uri.fsPath)) {
 						disposable.dispose()
@@ -72,7 +73,7 @@ export class VscodeDiffViewProvider extends DiffViewProvider {
 						query: Buffer.from(this.originalContent ?? "").toString("base64"),
 					}),
 					uri,
-					`${fileName}: ${fileExists ? "Original ↔ Cline's Changes" : "New File"} (Editable)`,
+					`${fileName}: ${isDelete ? "File Deletion" : fileExists ? "Original ↔ Cline's Changes" : "New File"} (Editable)`,
 					{
 						preserveFocus: true,
 					},
@@ -190,7 +191,7 @@ export class VscodeDiffViewProvider extends DiffViewProvider {
 		return this.activeDiffEditor.document.getText()
 	}
 
-	protected override async saveDocument(): Promise<Boolean> {
+	protected override async saveDocument(): Promise<boolean> {
 		if (!this.activeDiffEditor) {
 			return false
 		}
