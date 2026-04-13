@@ -104,7 +104,7 @@ struct DeclineSuggestionView: View {
     }
 
     private func generateSuggestions() async {
-        declineService.setup(apiKey: appState.apiKey)
+        declineService.setup(appState: appState)
         try? await declineService.generateDeclineSuggestions(
             schedules: schedules,
             tasks: tasks,

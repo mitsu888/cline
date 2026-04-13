@@ -1,8 +1,8 @@
 import Foundation
 import UserNotifications
-import MapKit
 
 /// 芸能人のマネージャーのように、出発時刻を逆算して段階的に催促通知を送るサービス
+/// 簡易版: GPS不使用、手動設定の移動時間を使用
 /// - 準備開始通知（出発時刻 - 準備時間）
 /// - 出発通知（移動時間 + バッファから逆算）
 /// - 急ぎ催促通知（出発時刻を過ぎた場合）
@@ -15,24 +15,18 @@ final class ManagerNotificationService: ObservableObject {
     /// スケジュールに対してマネージャー式の段階通知をセットアップ
     func setupManagerAlerts(
         for schedule: ScheduleItem,
-        homeLocation: String,
-        prepTimeMinutes: Int,
-        transportType: MKDirectionsTransportType
-    ) async {
-        guard !schedule.location.isEmpty, !homeLocation.isEmpty else { return }
+        prepTimeMinutes: Int
+    ) {
+        guard !schedule.location.isEmpty else { return }
 
         isCalculating = true
         defer { isCalculating = false }
 
-        guard let travel = await travelTimeService.calculateTravelTime(
-            from: homeLocation,
-            to: schedule.location,
-            transportType: transportType
-        ) else { return }
+        let travel = travelTimeService.getTravelTime(to: schedule.location)
 
-        let bufferMinutes: TimeInterval = 10 * 60  // 余裕10分
-        let travelSeconds = travel.travelTimeSeconds + bufferMinutes
-        let departureDate = schedule.startDate.addingTimeInterval(-travelSeconds)
+        let bufferMinutes = 10  // 余裕10分
+        let totalTravelMinutes = travel.travelTimeMinutes + bufferMinutes
+        let departureDate = schedule.startDate.addingTimeInterval(-TimeInterval(totalTravelMinutes * 60))
         let prepDate = departureDate.addingTimeInterval(-TimeInterval(prepTimeMinutes * 60))
         let urgentDate = departureDate.addingTimeInterval(5 * 60) // 出発5分後
 
@@ -40,22 +34,23 @@ final class ManagerNotificationService: ObservableObject {
         let scheduleId = schedule.id.uuidString.prefix(8)
         let travelMin = travel.travelTimeMinutes
         let departureTimeStr = departureDate.shortTimeString
+        let estimateNote = travel.isEstimated ? "（推定値）" : ""
 
         // 1. 準備開始通知
         if prepDate > now {
             let content = UNMutableNotificationContent()
             content.title = "準備を始めましょう"
-            content.body = "「\(schedule.title)」は\(schedule.startDate.shortTimeString)から。\(schedule.location)まで約\(travelMin)分。\(departureTimeStr)には出発しましょう。"
+            content.body = "「\(schedule.title)」は\(schedule.startDate.shortTimeString)から。\(schedule.location)まで約\(travelMin)分\(estimateNote)。\(departureTimeStr)には出発しましょう。"
             content.sound = .default
             content.categoryIdentifier = "MANAGER_PREP"
             scheduleNotification(id: "mgr-prep-\(scheduleId)", content: content, date: prepDate)
         }
 
-        // 2. 出発通知（短い音で催促）
+        // 2. 出発通知
         if departureDate > now {
             let content = UNMutableNotificationContent()
             content.title = "出発の時間です！"
-            content.body = "「\(schedule.title)」に間に合うよう、今すぐ出発してください。\(schedule.location)まで約\(travelMin)分です。"
+            content.body = "「\(schedule.title)」に間に合うよう、今すぐ出発してください。\(schedule.location)まで約\(travelMin)分\(estimateNote)です。"
             content.sound = UNNotificationSound.default
             content.interruptionLevel = .timeSensitive
             content.categoryIdentifier = "MANAGER_DEPART"
@@ -77,20 +72,16 @@ final class ManagerNotificationService: ObservableObject {
     /// 今日のすべてのスケジュールに対してマネージャー通知をセットアップ
     func setupAlertsForTodaySchedules(
         schedules: [ScheduleItem],
-        homeLocation: String,
-        prepTimeMinutes: Int,
-        transportType: MKDirectionsTransportType
-    ) async {
+        prepTimeMinutes: Int
+    ) {
         let todaySchedules = schedules
             .filter { $0.startDate.isToday && !$0.location.isEmpty && $0.startDate > Date() }
             .sorted { $0.startDate < $1.startDate }
 
         for schedule in todaySchedules {
-            await setupManagerAlerts(
+            setupManagerAlerts(
                 for: schedule,
-                homeLocation: homeLocation,
-                prepTimeMinutes: prepTimeMinutes,
-                transportType: transportType
+                prepTimeMinutes: prepTimeMinutes
             )
         }
     }

@@ -98,12 +98,12 @@ struct ScheduleView: View {
             }
             .onChange(of: selectedDate) { _, _ in
                 Task {
-                    await calculateTravelTimes()
+                    calculateTravelTimes()
                     await calendarSync.syncEventsForDate(selectedDate)
                 }
             }
             .task {
-                await calculateTravelTimes()
+                calculateTravelTimes()
                 await calendarSync.syncEventsForDate(selectedDate)
             }
         }
@@ -121,27 +121,25 @@ struct ScheduleView: View {
         }
     }
 
-    private func calculateTravelTimes() async {
+    private func calculateTravelTimes() {
         let schedulesWithLocation = filteredSchedules.filter { !$0.location.isEmpty }
         guard !schedulesWithLocation.isEmpty else { return }
 
-        travelTimes = await travelTimeService.calculateTravelTimesForToday(schedules: filteredSchedules)
+        travelTimes = travelTimeService.getTravelTimesForToday(schedules: filteredSchedules)
 
         // 出発通知も設定
         for schedule in schedulesWithLocation {
-            _ = await travelTimeService.calculateAndNotify(
-                currentLocation: appState.defaultLocation,
-                nextSchedule: schedule
+            _ = travelTimeService.calculateAndNotify(
+                nextSchedule: schedule,
+                prepTimeMinutes: appState.prepTimeMinutes
             )
         }
 
         // マネージャーモードの段階通知をセットアップ
-        if appState.managerModeEnabled && !appState.defaultLocation.isEmpty {
-            await managerService.setupAlertsForTodaySchedules(
+        if appState.managerModeEnabled {
+            managerService.setupAlertsForTodaySchedules(
                 schedules: filteredSchedules,
-                homeLocation: appState.defaultLocation,
-                prepTimeMinutes: appState.prepTimeMinutes,
-                transportType: appState.preferredTransport.mkTransportType
+                prepTimeMinutes: appState.prepTimeMinutes
             )
         }
     }
@@ -304,14 +302,12 @@ struct AddScheduleView: View {
         }
 
         // マネージャーモード: 新しい予定に対して段階通知をセットアップ
-        if appState.managerModeEnabled && !location.isEmpty && !appState.defaultLocation.isEmpty {
+        if appState.managerModeEnabled && !location.isEmpty {
             let managerService = ManagerNotificationService()
-            Task {
-                await managerService.setupManagerAlerts(
+            Task { @MainActor in
+                managerService.setupManagerAlerts(
                     for: schedule,
-                    homeLocation: appState.defaultLocation,
-                    prepTimeMinutes: appState.prepTimeMinutes,
-                    transportType: appState.preferredTransport.mkTransportType
+                    prepTimeMinutes: appState.prepTimeMinutes
                 )
             }
         }

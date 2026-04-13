@@ -49,7 +49,7 @@ struct AISecretaryApp: App {
     }
 
     private func setupManagerNotifications() {
-        guard appState.managerModeEnabled, !appState.defaultLocation.isEmpty else { return }
+        guard appState.managerModeEnabled else { return }
 
         let context = sharedModelContainer.mainContext
         let today = Calendar.current.startOfDay(for: Date())
@@ -63,12 +63,10 @@ struct AISecretaryApp: App {
         ) else { return }
 
         let managerService = ManagerNotificationService()
-        Task {
-            await managerService.setupAlertsForTodaySchedules(
+        Task { @MainActor in
+            managerService.setupAlertsForTodaySchedules(
                 schedules: schedules,
-                homeLocation: appState.defaultLocation,
-                prepTimeMinutes: appState.prepTimeMinutes,
-                transportType: appState.preferredTransport.mkTransportType
+                prepTimeMinutes: appState.prepTimeMinutes
             )
         }
     }

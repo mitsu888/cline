@@ -474,8 +474,8 @@ struct AddReflectionView: View {
         )
 
         // AI分析
-        if appState.isAPIKeySet {
-            reflectionService.setup(apiKey: appState.apiKey)
+        if appState.isRelayConfigured || appState.isAPIKeySet {
+            reflectionService.setup(appState: appState)
 
             let todaySchedules = schedules.filter { $0.startDate.isToday }
             let completedTasks = tasks.filter { $0.isCompleted && $0.completedAt?.isToday == true }

@@ -1,14 +1,35 @@
 import Foundation
 import Combine
-import MapKit
 
 final class AppState: ObservableObject {
+    // --- API設定（旧: 直接APIキー / 新: リレーサーバー） ---
     @Published var apiKey: String {
         didSet {
             KeychainHelper.save(key: "claude_api_key", value: apiKey)
         }
     }
     @Published var isAPIKeySet: Bool = false
+
+    /// リレーサーバーのURL（例: https://your-server.com）
+    @Published var relayServerURL: String {
+        didSet {
+            UserDefaults.standard.set(relayServerURL, forKey: "relay_server_url")
+        }
+    }
+
+    /// リレーサーバーの認証トークン
+    @Published var relayAuthToken: String {
+        didSet {
+            KeychainHelper.save(key: "relay_auth_token", value: relayAuthToken)
+        }
+    }
+
+    /// リレーサーバーが設定済みかどうか
+    var isRelayConfigured: Bool {
+        !relayServerURL.isEmpty && !relayAuthToken.isEmpty
+    }
+
+    // --- ユーザー設定 ---
     @Published var userName: String {
         didSet {
             UserDefaults.standard.set(userName, forKey: "user_name")
@@ -37,7 +58,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    // マネージャーモード設定
+    // --- マネージャーモード設定 ---
     @Published var managerModeEnabled: Bool {
         didSet {
             UserDefaults.standard.set(managerModeEnabled, forKey: "manager_mode_enabled")
@@ -48,6 +69,15 @@ final class AppState: ObservableObject {
             UserDefaults.standard.set(prepTimeMinutes, forKey: "prep_time_minutes")
         }
     }
+
+    /// デフォルト移動時間（分）- 場所別プリセットに未登録の場合に使用
+    @Published var defaultTravelMinutes: Int {
+        didSet {
+            UserDefaults.standard.set(defaultTravelMinutes, forKey: "default_travel_minutes")
+        }
+    }
+
+    /// 移動手段（表示用のみ。GPS版のルート計算には使用しない）
     @Published var preferredTransport: TransportMode {
         didSet {
             UserDefaults.standard.set(preferredTransport.rawValue, forKey: "preferred_transport")
@@ -58,11 +88,14 @@ final class AppState: ObservableObject {
         self.apiKey = KeychainHelper.load(key: "claude_api_key") ?? ""
         self.userName = UserDefaults.standard.string(forKey: "user_name") ?? ""
         self.isAPIKeySet = !apiKey.isEmpty
+        self.relayServerURL = UserDefaults.standard.string(forKey: "relay_server_url") ?? ""
+        self.relayAuthToken = KeychainHelper.load(key: "relay_auth_token") ?? ""
         self.defaultLocation = UserDefaults.standard.string(forKey: "default_location") ?? ""
         self.eveningReminderEnabled = UserDefaults.standard.bool(forKey: "evening_reminder_enabled")
         self.eveningReminderHour = UserDefaults.standard.object(forKey: "evening_reminder_hour") as? Int ?? 21
         self.managerModeEnabled = UserDefaults.standard.bool(forKey: "manager_mode_enabled")
         self.prepTimeMinutes = UserDefaults.standard.object(forKey: "prep_time_minutes") as? Int ?? 15
+        self.defaultTravelMinutes = UserDefaults.standard.object(forKey: "default_travel_minutes") as? Int ?? 30
         let transportRaw = UserDefaults.standard.integer(forKey: "preferred_transport")
         self.preferredTransport = TransportMode(rawValue: transportRaw) ?? .automobile
 
@@ -78,9 +111,14 @@ final class AppState: ObservableObject {
         apiKey = key
         isAPIKeySet = !key.isEmpty
     }
+
+    func updateRelayConfig(url: String, token: String) {
+        relayServerURL = url
+        relayAuthToken = token
+    }
 }
 
-/// 交通手段の設定
+/// 交通手段の設定（表示用ラベル）
 enum TransportMode: Int, CaseIterable {
     case automobile = 0
     case transit = 1
@@ -99,14 +137,6 @@ enum TransportMode: Int, CaseIterable {
         case .automobile: "car.fill"
         case .transit: "tram.fill"
         case .walking: "figure.walk"
-        }
-    }
-
-    var mkTransportType: MKDirectionsTransportType {
-        switch self {
-        case .automobile: .automobile
-        case .transit: .transit
-        case .walking: .walking
         }
     }
 }

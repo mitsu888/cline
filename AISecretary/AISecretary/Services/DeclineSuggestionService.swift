@@ -10,6 +10,14 @@ final class DeclineSuggestionService: ObservableObject {
 
     private var apiService: ClaudeAPIService?
 
+    func setup(appState: AppState) {
+        if appState.isRelayConfigured {
+            self.apiService = ClaudeAPIService(serverURL: appState.relayServerURL, authToken: appState.relayAuthToken)
+        } else {
+            self.apiService = ClaudeAPIService(apiKey: appState.apiKey)
+        }
+    }
+
     func setup(apiKey: String) {
         self.apiService = ClaudeAPIService(apiKey: apiKey)
     }

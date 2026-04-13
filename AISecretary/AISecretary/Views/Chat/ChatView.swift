@@ -11,7 +11,7 @@ struct ChatView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                if !appState.isAPIKeySet {
+                if !appState.isRelayConfigured && !appState.isAPIKeySet {
                     apiKeyPrompt
                 } else {
                     chatContent
@@ -31,26 +31,31 @@ struct ChatView: View {
                 }
             }
             .onAppear {
-                viewModel.setup(apiKey: appState.apiKey, modelContext: modelContext)
+                viewModel.setup(appState: appState, modelContext: modelContext)
             }
-            .onChange(of: appState.apiKey) { _, newValue in
-                viewModel.setup(apiKey: newValue, modelContext: modelContext)
+            .onChange(of: appState.relayServerURL) { _, _ in
+                viewModel.setup(appState: appState, modelContext: modelContext)
+            }
+            .onChange(of: appState.apiKey) { _, _ in
+                viewModel.setup(appState: appState, modelContext: modelContext)
             }
         }
     }
 
     private var apiKeyPrompt: some View {
         VStack(spacing: 16) {
-            Image(systemName: "key.fill")
+            Image(systemName: "server.rack")
                 .font(.system(size: 48))
                 .foregroundStyle(.secondary)
-            Text("Claude APIキーを設定してください")
+            Text("接続設定が必要です")
                 .font(.headline)
-            Text("設定タブからAPIキーを入力してください")
+            Text("設定タブからリレーサーバーURL、またはAPIキーを入力してください")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
     }
 
     private var chatContent: some View {

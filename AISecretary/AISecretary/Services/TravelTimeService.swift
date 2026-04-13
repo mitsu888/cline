@@ -1,82 +1,87 @@
 import Foundation
-import MapKit
 
-/// 移動時間を自動計算するサービス
-/// MapKitを使用して、予定の場所間の移動時間を計算し、出発通知を提供
+/// 移動時間を管理するサービス（簡易版 - GPS不使用）
+/// ユーザーが手動で設定した移動時間を使用し、出発通知を提供
 @MainActor
 final class TravelTimeService: ObservableObject {
     @Published var isCalculating = false
 
-    /// 場所名から座標を検索
-    func geocode(location: String) async -> CLLocationCoordinate2D? {
-        let geocoder = CLGeocoder()
-        do {
-            let placemarks = try await geocoder.geocodeAddressString(location)
-            return placemarks.first?.location?.coordinate
-        } catch {
-            return nil
+    /// 保存済みの移動時間プリセット（場所名 → 移動分数）
+    /// UserDefaultsで永続化
+    var savedTravelTimes: [String: Int] {
+        get {
+            UserDefaults.standard.dictionary(forKey: "saved_travel_times") as? [String: Int] ?? [:]
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "saved_travel_times")
         }
     }
 
-    /// 2つの場所間の移動時間を計算
-    func calculateTravelTime(
-        from origin: String,
-        to destination: String,
-        transportType: MKDirectionsTransportType = .automobile
-    ) async -> TravelTimeResult? {
-        isCalculating = true
-        defer { isCalculating = false }
-
-        guard let originCoord = await geocode(location: origin),
-              let destCoord = await geocode(location: destination) else {
-            return nil
-        }
-
-        let request = MKDirections.Request()
-        request.source = MKMapItem(placemark: MKPlacemark(coordinate: originCoord))
-        request.destination = MKMapItem(placemark: MKPlacemark(coordinate: destCoord))
-        request.transportType = transportType
-
-        let directions = MKDirections(request: request)
-
-        do {
-            let response = try await directions.calculate()
-            guard let route = response.routes.first else { return nil }
-
-            return TravelTimeResult(
-                travelTimeSeconds: route.expectedTravelTime,
-                distanceMeters: route.distance,
-                transportType: transportType
-            )
-        } catch {
-            return nil
-        }
+    /// デフォルトの移動時間（分）- プリセットに登録がない場合に使用
+    var defaultTravelMinutes: Int {
+        get { UserDefaults.standard.object(forKey: "default_travel_minutes") as? Int ?? 30 }
+        set { UserDefaults.standard.set(newValue, forKey: "default_travel_minutes") }
     }
 
-    /// スケジュール間の移動時間を計算し、出発通知を設定
+    /// 場所に対する移動時間を取得（手動設定値を参照）
+    func getTravelTime(to destination: String) -> TravelTimeResult {
+        let minutes: Int
+
+        // 完全一致で検索
+        if let saved = savedTravelTimes[destination] {
+            minutes = saved
+        }
+        // 部分一致で検索（「渋谷」で「渋谷駅前ホール」にもマッチ）
+        else if let match = savedTravelTimes.first(where: { destination.contains($0.key) || $0.key.contains(destination) }) {
+            minutes = match.value
+        }
+        // デフォルト値を使用
+        else {
+            minutes = defaultTravelMinutes
+        }
+
+        return TravelTimeResult(
+            travelTimeMinutes: minutes,
+            destinationName: destination,
+            isEstimated: savedTravelTimes[destination] == nil
+        )
+    }
+
+    /// 移動時間プリセットを保存
+    func saveTravelTime(destination: String, minutes: Int) {
+        var times = savedTravelTimes
+        times[destination] = minutes
+        savedTravelTimes = times
+    }
+
+    /// 移動時間プリセットを削除
+    func removeTravelTime(destination: String) {
+        var times = savedTravelTimes
+        times.removeValue(forKey: destination)
+        savedTravelTimes = times
+    }
+
+    /// スケジュールに対して出発通知を設定
     func calculateAndNotify(
-        currentLocation: String,
-        nextSchedule: ScheduleItem
-    ) async -> TravelTimeResult? {
+        nextSchedule: ScheduleItem,
+        prepTimeMinutes: Int
+    ) -> TravelTimeResult? {
         guard !nextSchedule.location.isEmpty else { return nil }
 
-        let origin = currentLocation.isEmpty ? "現在地" : currentLocation
-        guard let result = await calculateTravelTime(
-            from: origin,
-            to: nextSchedule.location
-        ) else { return nil }
+        let result = getTravelTime(to: nextSchedule.location)
 
         // 移動時間 + バッファ（10分）を考慮した出発時刻を計算
-        let bufferMinutes: TimeInterval = 10 * 60
+        let bufferMinutes = 10
+        let totalMinutes = result.travelTimeMinutes + bufferMinutes
         let departureTime = nextSchedule.startDate.addingTimeInterval(
-            -(result.travelTimeSeconds + bufferMinutes)
+            -TimeInterval(totalMinutes * 60)
         )
 
         if departureTime > Date() {
             NotificationService.shared.scheduleNotification(
                 id: "travel-\(nextSchedule.id)",
                 title: "そろそろ出発の時間です",
-                body: "「\(nextSchedule.title)」まで約\(result.travelTimeMinutes)分。\(nextSchedule.location)への移動を始めましょう。",
+                body: "「\(nextSchedule.title)」まで約\(result.travelTimeMinutes)分\(result.isEstimated ? "（推定）" : "")。\(nextSchedule.location)への移動を始めましょう。",
                 date: departureTime
             )
         }
@@ -84,60 +89,39 @@ final class TravelTimeService: ObservableObject {
         return result
     }
 
-    /// 今日のスケジュールに対して移動時間を一括計算
-    func calculateTravelTimesForToday(
+    /// 今日のスケジュールに対して移動時間を一括取得
+    func getTravelTimesForToday(
         schedules: [ScheduleItem]
-    ) async -> [UUID: TravelTimeResult] {
+    ) -> [UUID: TravelTimeResult] {
         var results: [UUID: TravelTimeResult] = [:]
-        let sortedSchedules = schedules
+        let todaySchedules = schedules
             .filter { $0.startDate.isToday && !$0.location.isEmpty }
             .sorted { $0.startDate < $1.startDate }
 
-        var previousLocation = ""
-        for schedule in sortedSchedules {
-            if !previousLocation.isEmpty {
-                if let result = await calculateTravelTime(
-                    from: previousLocation,
-                    to: schedule.location
-                ) {
-                    results[schedule.id] = result
-                }
-            }
-            previousLocation = schedule.location
+        for schedule in todaySchedules {
+            results[schedule.id] = getTravelTime(to: schedule.location)
         }
 
         return results
     }
 }
 
-/// 移動時間の計算結果
+/// 移動時間の結果（簡易版）
 struct TravelTimeResult {
-    let travelTimeSeconds: TimeInterval
-    let distanceMeters: Double
-    let transportType: MKDirectionsTransportType
+    let travelTimeMinutes: Int
+    let destinationName: String
+    let isEstimated: Bool   // true = デフォルト値使用（プリセット未登録）
 
-    var travelTimeMinutes: Int {
-        Int(ceil(travelTimeSeconds / 60))
-    }
-
-    var distanceText: String {
-        if distanceMeters >= 1000 {
-            return String(format: "%.1f km", distanceMeters / 1000)
-        } else {
-            return "\(Int(distanceMeters)) m"
-        }
-    }
-
-    var transportIcon: String {
-        switch transportType {
-        case .automobile: "car.fill"
-        case .walking: "figure.walk"
-        case .transit: "tram.fill"
-        default: "car.fill"
-        }
+    var travelTimeSeconds: TimeInterval {
+        TimeInterval(travelTimeMinutes * 60)
     }
 
     var summary: String {
-        "約\(travelTimeMinutes)分（\(distanceText)）"
+        let estimate = isEstimated ? "（推定）" : ""
+        return "約\(travelTimeMinutes)分\(estimate)"
+    }
+
+    var transportIcon: String {
+        "mappin.and.ellipse"
     }
 }

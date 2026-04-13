@@ -1,23 +1,37 @@
 import Foundation
 
+/// ClaudeAPIService - リレーサーバー経由でClaude APIと通信
+/// APIキーはサーバー側で管理されるため、クライアントには不要
 actor ClaudeAPIService {
-    private let baseURL = "https://api.anthropic.com/v1/messages"
-    private let model = "claude-sonnet-4-20250514"
-    private var apiKey: String
+    private var serverURL: String
+    private var authToken: String
+
+    init(serverURL: String, authToken: String) {
+        self.serverURL = serverURL.hasSuffix("/") ? String(serverURL.dropLast()) : serverURL
+        self.authToken = authToken
+    }
+
+    /// サーバーURLを更新（設定変更時）
+    func updateServerURL(_ url: String) {
+        self.serverURL = url.hasSuffix("/") ? String(url.dropLast()) : url
+    }
+
+    /// 認証トークンを更新
+    func updateAuthToken(_ token: String) {
+        self.authToken = token
+    }
+
+    // --- 旧API直接呼び出し用（フォールバック） ---
+    private var legacyAPIKey: String?
 
     init(apiKey: String) {
-        self.apiKey = apiKey
+        self.serverURL = ""
+        self.authToken = ""
+        self.legacyAPIKey = apiKey
     }
 
     func updateAPIKey(_ key: String) {
-        self.apiKey = key
-    }
-
-    struct APIRequest: Encodable {
-        let model: String
-        let max_tokens: Int
-        let system: String?
-        let messages: [APIMessage]
+        self.legacyAPIKey = key
     }
 
     struct APIMessage: Codable {
@@ -25,16 +39,46 @@ actor ClaudeAPIService {
         let content: String
     }
 
-    struct APIResponse: Decodable {
-        let content: [ContentBlock]
+    /// リレーサーバーへのリクエスト
+    struct RelayRequest: Encodable {
+        let messages: [APIMessage]
+        let system: String?
+        let max_tokens: Int?
+    }
 
+    /// リレーサーバーからのレスポンス
+    struct RelayResponse: Decodable {
+        let text: String
+        let usage: Usage?
+
+        struct Usage: Decodable {
+            let input_tokens: Int?
+            let output_tokens: Int?
+        }
+    }
+
+    /// リレーサーバーからのエラーレスポンス
+    struct RelayErrorResponse: Decodable {
+        let error: String
+    }
+
+    // --- 旧API直接呼び出し用の型（フォールバック） ---
+    struct LegacyAPIRequest: Encodable {
+        let model: String
+        let max_tokens: Int
+        let system: String?
+        let messages: [APIMessage]
+    }
+
+    struct LegacyAPIResponse: Decodable {
+        let content: [ContentBlock]
         struct ContentBlock: Decodable {
             let type: String
             let text: String?
         }
     }
 
-    struct APIError: Decodable {
+    struct LegacyAPIError: Decodable {
         let error: ErrorDetail
         struct ErrorDetail: Decodable {
             let type: String
@@ -79,33 +123,42 @@ actor ClaudeAPIService {
     優先度は "low", "normal", "high", "urgent" のいずれかです。
     """
 
+    /// リレーサーバー経由でメッセージを送信（推奨）
+    /// サーバーが未設定の場合は旧API直接呼び出しにフォールバック
     func sendMessage(messages: [APIMessage]) async throws -> String {
-        guard !apiKey.isEmpty else {
-            print("[AISecretary] エラー: APIキーが空です")
-            throw ClaudeError.noAPIKey
+        // リレーサーバーが設定されている場合
+        if !serverURL.isEmpty && !authToken.isEmpty {
+            return try await sendViaRelay(messages: messages)
         }
 
-        guard let url = URL(string: baseURL) else {
-            print("[AISecretary] エラー: 無効なURL")
+        // フォールバック: 旧API直接呼び出し
+        if let apiKey = legacyAPIKey, !apiKey.isEmpty {
+            return try await sendDirectly(messages: messages, apiKey: apiKey)
+        }
+
+        throw ClaudeError.noAPIKey
+    }
+
+    /// リレーサーバー経由の送信
+    private func sendViaRelay(messages: [APIMessage]) async throws -> String {
+        guard let url = URL(string: "\(serverURL)/api/chat") else {
             throw ClaudeError.invalidResponse
         }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "content-type")
-        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 60
 
-        let body = APIRequest(
-            model: model,
-            max_tokens: 2048,
+        let body = RelayRequest(
+            messages: messages,
             system: systemPrompt,
-            messages: messages
+            max_tokens: 2048
         )
         request.httpBody = try JSONEncoder().encode(body)
 
-        print("[AISecretary] API呼び出し開始: モデル=\(model), メッセージ数=\(messages.count)")
+        print("[AISecretary] リレーサーバー経由でAPI呼び出し: \(serverURL)")
 
         let data: Data
         let response: URLResponse
@@ -117,39 +170,81 @@ actor ClaudeAPIService {
         }
 
         guard let httpResponse = response as? HTTPURLResponse else {
-            print("[AISecretary] エラー: HTTPレスポンスではありません")
             throw ClaudeError.invalidResponse
         }
 
-        print("[AISecretary] HTTPステータス: \(httpResponse.statusCode)")
+        print("[AISecretary] リレー HTTPステータス: \(httpResponse.statusCode)")
+
+        if httpResponse.statusCode == 401 {
+            throw ClaudeError.apiError("認証エラー: サーバーの認証トークンを確認してください")
+        }
 
         if httpResponse.statusCode != 200 {
-            let responseBody = String(data: data, encoding: .utf8) ?? "(読み取り不可)"
-            print("[AISecretary] APIエラーレスポンス: \(responseBody)")
-            if let apiError = try? JSONDecoder().decode(APIError.self, from: data) {
+            if let errorResp = try? JSONDecoder().decode(RelayErrorResponse.self, from: data) {
+                throw ClaudeError.apiError(errorResp.error)
+            }
+            throw ClaudeError.httpError(httpResponse.statusCode)
+        }
+
+        let relayResponse: RelayResponse
+        do {
+            relayResponse = try JSONDecoder().decode(RelayResponse.self, from: data)
+        } catch {
+            throw ClaudeError.parseError
+        }
+
+        if relayResponse.text.isEmpty {
+            print("[AISecretary] 警告: リレーレスポンスのテキストが空です")
+        } else {
+            print("[AISecretary] リレー応答受信: \(relayResponse.text.prefix(100))...")
+        }
+        return relayResponse.text
+    }
+
+    /// 旧API直接呼び出し（フォールバック用）
+    private func sendDirectly(messages: [APIMessage], apiKey: String) async throws -> String {
+        guard let url = URL(string: "https://api.anthropic.com/v1/messages") else {
+            throw ClaudeError.invalidResponse
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.timeoutInterval = 60
+
+        let body = LegacyAPIRequest(
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 2048,
+            system: systemPrompt,
+            messages: messages
+        )
+        request.httpBody = try JSONEncoder().encode(body)
+
+        print("[AISecretary] API直接呼び出し（フォールバック）")
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            throw ClaudeError.networkError(error.localizedDescription)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw ClaudeError.invalidResponse
+        }
+
+        if httpResponse.statusCode != 200 {
+            if let apiError = try? JSONDecoder().decode(LegacyAPIError.self, from: data) {
                 throw ClaudeError.apiError(apiError.error.message)
             }
             throw ClaudeError.httpError(httpResponse.statusCode)
         }
 
-        let apiResponse: APIResponse
-        do {
-            apiResponse = try JSONDecoder().decode(APIResponse.self, from: data)
-        } catch {
-            let responseBody = String(data: data, encoding: .utf8) ?? "(読み取り不可)"
-            print("[AISecretary] JSONデコードエラー: \(error), レスポンス: \(responseBody)")
-            throw ClaudeError.parseError
-        }
-
-        let result = apiResponse.content.compactMap(\.text).joined()
-        if result.isEmpty {
-            print("[AISecretary] 警告: APIレスポンスのテキストが空です")
-            let responseBody = String(data: data, encoding: .utf8) ?? "(読み取り不可)"
-            print("[AISecretary] 生レスポンス: \(responseBody)")
-        } else {
-            print("[AISecretary] 応答受信: \(result.prefix(100))...")
-        }
-        return result
+        let apiResponse = try JSONDecoder().decode(LegacyAPIResponse.self, from: data)
+        return apiResponse.content.compactMap(\.text).joined()
     }
 
     func analyzeVoiceMemo(transcription: String) async throws -> VoiceMemoAnalysis {

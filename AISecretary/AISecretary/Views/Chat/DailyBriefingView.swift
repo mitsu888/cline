@@ -47,7 +47,7 @@ struct DailyBriefingView: View {
             }
             .task {
                 if briefingService.todaysBriefing == nil {
-                    travelTimes = await travelTimeService.calculateTravelTimesForToday(schedules: schedules)
+                    travelTimes = travelTimeService.getTravelTimesForToday(schedules: schedules)
                     await generateBriefing()
                 }
             }
@@ -245,7 +245,7 @@ struct DailyBriefingView: View {
     }
 
     private func generateBriefing() async {
-        briefingService.setup(apiKey: appState.apiKey)
+        briefingService.setup(appState: appState)
         _ = try? await briefingService.generateDailyBriefing(
             schedules: schedules,
             tasks: tasks,

@@ -88,9 +88,14 @@ struct MemoListView: View {
         let memo = Memo(content: transcription, isVoiceMemo: true)
         modelContext.insert(memo)
 
-        if appState.isAPIKeySet {
+        if appState.isRelayConfigured || appState.isAPIKeySet {
             Task {
-                let service = ClaudeAPIService(apiKey: appState.apiKey)
+                let service: ClaudeAPIService
+                if appState.isRelayConfigured {
+                    service = ClaudeAPIService(serverURL: appState.relayServerURL, authToken: appState.relayAuthToken)
+                } else {
+                    service = ClaudeAPIService(apiKey: appState.apiKey)
+                }
 
                 // 分析と約束抽出を並行実行
                 async let analysisResult = service.analyzeVoiceMemo(transcription: transcription)

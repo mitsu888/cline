@@ -12,6 +12,26 @@ final class ChatViewModel: ObservableObject {
     private var apiService: ClaudeAPIService?
     private var modelContext: ModelContext?
 
+    /// リレーサーバー経由（推奨）またはAPI直接接続でセットアップ
+    func setup(appState: AppState, modelContext: ModelContext) {
+        if appState.isRelayConfigured {
+            self.apiService = ClaudeAPIService(
+                serverURL: appState.relayServerURL,
+                authToken: appState.relayAuthToken
+            )
+        } else {
+            self.apiService = ClaudeAPIService(apiKey: appState.apiKey)
+        }
+        self.modelContext = modelContext
+
+        if currentConversation == nil {
+            let conversation = Conversation()
+            modelContext.insert(conversation)
+            currentConversation = conversation
+        }
+    }
+
+    /// 旧互換: apiKeyのみでセットアップ（フォールバック用）
     func setup(apiKey: String, modelContext: ModelContext) {
         self.apiService = ClaudeAPIService(apiKey: apiKey)
         self.modelContext = modelContext

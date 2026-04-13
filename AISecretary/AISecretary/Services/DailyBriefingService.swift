@@ -13,6 +13,19 @@ final class DailyBriefingService: ObservableObject {
 
     private var apiService: ClaudeAPIService?
 
+    /// リレーサーバー経由またはAPI直接接続でセットアップ
+    func setup(appState: AppState) {
+        if appState.isRelayConfigured {
+            self.apiService = ClaudeAPIService(
+                serverURL: appState.relayServerURL,
+                authToken: appState.relayAuthToken
+            )
+        } else {
+            self.apiService = ClaudeAPIService(apiKey: appState.apiKey)
+        }
+    }
+
+    /// 旧互換: apiKeyのみでセットアップ
     func setup(apiKey: String) {
         self.apiService = ClaudeAPIService(apiKey: apiKey)
     }
@@ -51,7 +64,7 @@ final class DailyBriefingService: ObservableObject {
                 line += " [場所: \(schedule.location)]"
             }
             if let travel = travelTimes[schedule.id] {
-                line += " [移動時間: 約\(travel.travelTimeMinutes)分, \(travel.distanceText)]"
+                line += " [移動時間: \(travel.summary)]"
             }
             return line
         }.joined(separator: "\n")

@@ -5,16 +5,77 @@ struct SettingsView: View {
     @State private var apiKeyInput = ""
     @State private var showAPIKey = false
     @State private var notificationEnabled = false
+    @State private var serverURLInput = ""
+    @State private var authTokenInput = ""
+    @State private var showAuthToken = false
+    @State private var showServerTestResult = false
+    @State private var serverTestSuccess = false
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("ユーザー設定") {
                     TextField("お名前", text: $appState.userName)
-                    TextField("自宅/職場の住所（移動時間計算用）", text: $appState.defaultLocation)
+                    TextField("自宅/職場の住所（表示用）", text: $appState.defaultLocation)
                 }
 
-                Section("Claude API") {
+                // --- リレーサーバー設定（推奨） ---
+                Section {
+                    TextField("サーバーURL", text: $serverURLInput)
+                        .textContentType(.URL)
+                        .autocapitalization(.none)
+                        #if os(iOS)
+                        .keyboardType(.URL)
+                        #endif
+
+                    HStack {
+                        if showAuthToken {
+                            TextField("認証トークン", text: $authTokenInput)
+                                .autocapitalization(.none)
+                        } else {
+                            SecureField("認証トークン", text: $authTokenInput)
+                        }
+                        Button {
+                            showAuthToken.toggle()
+                        } label: {
+                            Image(systemName: showAuthToken ? "eye.slash" : "eye")
+                        }
+                    }
+
+                    Button("サーバー設定を保存") {
+                        appState.updateRelayConfig(url: serverURLInput, token: authTokenInput)
+                        testServerConnection()
+                    }
+                    .disabled(serverURLInput.isEmpty || authTokenInput.isEmpty)
+
+                    if appState.isRelayConfigured {
+                        HStack {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                            Text("リレーサーバーが設定されています")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if showServerTestResult {
+                        HStack {
+                            Image(systemName: serverTestSuccess ? "wifi" : "wifi.slash")
+                                .foregroundStyle(serverTestSuccess ? .green : .red)
+                            Text(serverTestSuccess ? "サーバー接続OK" : "サーバーに接続できません")
+                                .font(.caption)
+                                .foregroundStyle(serverTestSuccess ? .green : .red)
+                        }
+                    }
+                } header: {
+                    Text("APIリレーサーバー（推奨）")
+                } footer: {
+                    Text("APIキーをサーバー側で管理します。クライアントにAPIキーを保存する必要がありません。")
+                        .font(.caption)
+                }
+
+                // --- 旧API直接接続（フォールバック） ---
+                Section {
                     HStack {
                         if showAPIKey {
                             TextField("APIキー", text: $apiKeyInput)
@@ -34,11 +95,11 @@ struct SettingsView: View {
                     }
                     .disabled(apiKeyInput.isEmpty)
 
-                    if appState.isAPIKeySet {
+                    if appState.isAPIKeySet && !appState.isRelayConfigured {
                         HStack {
                             Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
-                            Text("APIキーが設定されています")
+                                .foregroundStyle(.orange)
+                            Text("APIキーが設定されています（直接接続モード）")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -50,6 +111,11 @@ struct SettingsView: View {
                         KeychainHelper.delete(key: "claude_api_key")
                     }
                     .disabled(!appState.isAPIKeySet)
+                } header: {
+                    Text("Claude API直接接続（フォールバック）")
+                } footer: {
+                    Text("リレーサーバーが未設定の場合にのみ使用されます。APIキーがクライアントに保存されます。")
+                        .font(.caption)
                 }
 
                 // エネルギープロファイル
@@ -94,7 +160,7 @@ struct SettingsView: View {
                     }
                 }
 
-                // マネージャーモード
+                // --- マネージャーモード ---
                 Section("マネージャーモード") {
                     Toggle("マネージャーモードを有効にする", isOn: $appState.managerModeEnabled)
 
@@ -109,9 +175,21 @@ struct SettingsView: View {
 
                         Stepper("準備時間: \(appState.prepTimeMinutes)分", value: $appState.prepTimeMinutes, in: 5...60, step: 5)
 
-                        Picker("交通手段", selection: $appState.preferredTransport) {
+                        Stepper("デフォルト移動時間: \(appState.defaultTravelMinutes)分", value: $appState.defaultTravelMinutes, in: 5...120, step: 5)
+
+                        Picker("主な交通手段", selection: $appState.preferredTransport) {
                             ForEach(TransportMode.allCases, id: \.self) { mode in
                                 Label(mode.label, systemImage: mode.icon).tag(mode)
+                            }
+                        }
+
+                        NavigationLink {
+                            TravelTimePresetsView()
+                        } label: {
+                            HStack {
+                                Image(systemName: "mappin.and.ellipse")
+                                    .foregroundStyle(.blue)
+                                Text("場所別の移動時間を設定")
                             }
                         }
 
@@ -163,10 +241,14 @@ struct SettingsView: View {
 
                 Section("アプリについて") {
                     LabeledContent("バージョン") {
-                        Text("2.0.0")
+                        Text("3.0.0")
                     }
                     LabeledContent("AIモデル") {
                         Text("Claude Sonnet 4")
+                    }
+                    LabeledContent("接続モード") {
+                        Text(appState.isRelayConfigured ? "リレーサーバー" : "直接接続")
+                            .foregroundStyle(appState.isRelayConfigured ? .green : .orange)
                     }
                 }
             }
@@ -176,7 +258,37 @@ struct SettingsView: View {
             #endif
             .onAppear {
                 apiKeyInput = appState.apiKey
+                serverURLInput = appState.relayServerURL
+                authTokenInput = appState.relayAuthToken
             }
+        }
+    }
+
+    private func testServerConnection() {
+        guard !serverURLInput.isEmpty else { return }
+
+        let urlString = serverURLInput.hasSuffix("/")
+            ? "\(serverURLInput)health"
+            : "\(serverURLInput)/health"
+
+        guard let url = URL(string: urlString) else {
+            showServerTestResult = true
+            serverTestSuccess = false
+            return
+        }
+
+        Task {
+            do {
+                let (_, response) = try await URLSession.shared.data(from: url)
+                if let httpResponse = response as? HTTPURLResponse {
+                    serverTestSuccess = httpResponse.statusCode == 200
+                } else {
+                    serverTestSuccess = false
+                }
+            } catch {
+                serverTestSuccess = false
+            }
+            showServerTestResult = true
         }
     }
 }
